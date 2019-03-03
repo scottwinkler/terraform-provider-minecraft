@@ -1,28 +1,16 @@
 package minecraft
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"log"
+	"time"
 
 	"github.com/hashicorp/terraform/helper/schema"
+	sdk "github.com/scottwinkler/go-minecraft"
+	"github.com/scottwinkler/terraform/helper/resource"
 )
-
-//CylinderRequest struct
-type CylinderRequest struct {
-	MaterialID string `json:"materialId"`
-	Location   []int  `json:"location"`
-	Dimensions []int  `json:"cylinderDimensions"`
-}
-
-//Cylinder struct
-type Cylinder struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Location []int  `json:"location"`
-	//Dimensions   []int    `json:"cylinderDimensions"`
-	PreviousData []string `json:"previousData"`
-	CurrentData  []string `json:"currentData"`
-	MaterialID   string   `json:"materialId"`
-}
 
 func resourceMinecraftCylinder() *schema.Resource {
 	return &schema.Resource{
@@ -50,6 +38,10 @@ func resourceMinecraftCylinder() *schema.Resource {
 							Type:     schema.TypeInt,
 							Required: true,
 						},
+						"world": {
+							Type:     schema.TypeString,
+							Required: true,
+						},
 					},
 				},
 			},
@@ -59,22 +51,22 @@ func resourceMinecraftCylinder() *schema.Resource {
 				MaxItems: 1,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
-						"radius": {
+						"height": {
 							Type:     schema.TypeInt,
 							Required: true,
 						},
-						"height": {
+						"radius": {
 							Type:     schema.TypeInt,
 							Required: true,
 						},
 					},
 				},
 			},
-			"material_id": {
+			"material": {
 				Type:     schema.TypeString,
 				Required: true,
 			},
-			"type": {
+			"shape_type": {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
@@ -85,130 +77,107 @@ func resourceMinecraftCylinder() *schema.Resource {
 					Type: schema.TypeString,
 				},
 			},
-			"current_data": {
-				Type:     schema.TypeList,
-				Computed: true,
-				Elem: &schema.Schema{
-					Type: schema.TypeString,
-				},
-			},
-			"dirty": {
-				Type:     schema.TypeBool,
-				Optional: true,
-				Default:  false,
-			},
 		},
 	}
 }
 
-func deserializeCylinderDimensions(dimensions []int) []interface{} {
-	l := make([]interface{}, 1)
-	m := make(map[string]interface{})
-	m["radius"] = dimensions[0]
-	m["height"] = dimensions[1]
-	l[0] = m
-	return l
-}
-
-func serializeCylinderDimensions(dimensions interface{}) []int {
-	var radius int
-	var height int
-	d := dimensions.([]interface{})[0].(map[string]interface{})
-	r, _ := d["radius"]
-	radius = r.(int)
-	h, _ := d["height"]
-	height = h.(int)
-	return []int{radius, height}
-}
-
-func makeCylinderRequest(d *schema.ResourceData) *CylinderRequest {
-	// Get the material id
-	materialID := d.Get("material_id").(string)
-	dimensions := serializeCylinderDimensions(d.Get("dimensions"))
-	location := serializeLocation(d.Get("location"))
-
-	cylinderRequest := &CylinderRequest{
-		MaterialID: materialID,
-		Dimensions: dimensions,
-		Location:   location,
-	}
-	return cylinderRequest
-}
 func resourceMinecraftCylinderCreate(d *schema.ResourceData, meta interface{}) error {
-	minecraftClient := meta.(*Client)
+	conn := meta.(*sdk.Client)
 
-	req, err := minecraftClient.newRequest("POST", "cylinder/", makeCylinderRequest(d))
-	if err != nil {
-		return err
+	// Create a context
+	ctx := context.Background()
+
+	// Create a new cylinder
+	options := sdk.ShapeCreateOptions{
+		Location:   deserializeLocation(d.Get("location")),
+		ShapeType:  sdk.ShapeTypeCylinder,
+		Material:   d.Get("material").(string),
+		Dimensions: deserializeCylinderDimensions(d.Get("dimensions")),
 	}
 
-	cylinder := &Cylinder{}
-	err = minecraftClient.do(ctx, req, cylinder)
-	if err != nil {
-		return err
-	}
-	d.SetId(cylinder.ID)
+	shape, _ := conn.Shapes.Create(ctx, options)
+	d.SetId(shape.ID)
 	resourceMinecraftCylinderRead(d, meta)
 	return nil
 }
 
 func resourceMinecraftCylinderRead(d *schema.ResourceData, meta interface{}) error {
-	minecraftClient := meta.(*Client)
+	conn := meta.(*sdk.Client)
+
+	// Create a context
+	ctx := context.Background()
+
 	id := d.Id()
-	req, err := minecraftClient.newRequest("GET", "cylinder/"+id, nil)
+	var shape *sdk.Shape
+	// Wait until resource is in a valid state
+	err := resource.Retry(1*time.Minute, func() *resource.RetryError {
+		shape, err := conn.Shapes.Read(ctx, id)
+		if err != nil {
+			log.Printf("[DEBUG] Error reading Shape: %s", err)
+			return resource.NonRetryableError(err)
+		}
+		if shape.Status != sdk.ResourceStatusReady {
+			log.Printf("[DEBUG] Shape not in ready state: %s", shape.Status)
+			return resource.RetryableError(errors.New("invalid state"))
+		}
+		return nil
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("Error reading Shape: %s", err)
 	}
 
-	cylinder := &Cylinder{}
-	err = minecraftClient.do(ctx, req, cylinder)
-	if err != nil {
-		return err
-	}
-	d.Set("material_id", cylinder.MaterialID)
-	log.Printf("loc: %v", cylinder.Location)
-	d.Set("location", deserializeLocation(cylinder.Location))
-	//log.Printf("dim: %v", cylinder.Dimensions)
-	//d.Set("dimensions", deserializeCylinderDimensions(cylinder.Dimensions))
-	d.Set("current_data", cylinder.CurrentData)
-	d.Set("previous_data", cylinder.PreviousData)
-	for _, element := range cylinder.CurrentData {
-		if element != cylinder.MaterialID {
-			d.Set("dirty", true)
-			break
-		}
-	}
-	d.Set("current_data", cylinder.CurrentData)
-	d.Set("type", cylinder.Type)
+	d.Set("material", shape.Material)
+	d.Set("location", serializeLocation(shape.Location))
+	d.Set("dimensions", serializeCylinderDimensions(shape.Dimensions.(*sdk.CylinderDimensions)))
+	d.Set("previous_data", shape.PreviousData)
+	d.Set("shape_type", shape.ShapeType)
 	return nil
 }
 
 func resourceMinecraftCylinderUpdate(d *schema.ResourceData, meta interface{}) error {
-	minecraftClient := meta.(*Client)
-	id := d.Id()
-	req, err := minecraftClient.newRequest("PATCH", "cylinder/"+id, makeCylinderRequest(d))
-	if err != nil {
-		return err
+	conn := meta.(*sdk.Client)
+
+	// Create a context
+	ctx := context.Background()
+
+	// Update cylinder to current settings
+	options := sdk.ShapeUpdateOptions{
+		Location:   deserializeLocation(d.Get("location")),
+		ShapeType:  sdk.ShapeTypeCylinder,
+		Material:   d.Get("material").(string),
+		Dimensions: deserializeCylinderDimensions(d.Get("dimensions")),
 	}
 
-	cylinder := &Cylinder{}
-	err = minecraftClient.do(ctx, req, cylinder)
-	if err != nil {
-		return err
-	}
+	id := d.Id()
+	conn.Shapes.Update(ctx, id, options)
 	return resourceMinecraftCylinderRead(d, meta)
 }
 
 func resourceMinecraftCylinderDelete(d *schema.ResourceData, meta interface{}) error {
-	minecraftClient := meta.(*Client)
+	conn := meta.(*sdk.Client)
 	id := d.Id()
-	req, err := minecraftClient.newRequest("DELETE", "cylinder/"+id, nil)
-	if err != nil {
-		return err
-	}
-	err = minecraftClient.do(ctx, req, nil)
-	if err != nil {
-		return err
-	}
+
+	// Create a context
+	ctx := context.Background()
+
+	conn.Shapes.Delete(ctx, id)
 	return nil
+}
+
+func deserializeCylinderDimensions(dimensions interface{}) *sdk.CylinderDimensions {
+	d := dimensions.([]interface{})[0].(map[string]interface{})
+	h, _ := d["height"]
+	height := h.(int)
+	r, _ := d["radius"]
+	radius := r.(int)
+	return sdk.NewCylinderDimensions(height, radius)
+}
+
+func serializeCylinderDimensions(dimensions *sdk.CylinderDimensions) interface{} {
+	d := make([]interface{}, 1)
+	m := make(map[string]interface{})
+	m["height"] = dimensions.Height
+	m["radius"] = dimensions.Radius
+	d[0] = m
+	return d
 }

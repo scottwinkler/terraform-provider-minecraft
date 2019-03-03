@@ -1,28 +1,16 @@
 package minecraft
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"log"
+	"time"
 
 	"github.com/hashicorp/terraform/helper/schema"
+	sdk "github.com/scottwinkler/go-minecraft"
+	"github.com/scottwinkler/terraform/helper/resource"
 )
-
-//CubeRequest struct
-type CubeRequest struct {
-	MaterialID string `json:"materialId"`
-	Location   []int  `json:"location"`
-	Dimensions []int  `json:"cubeDimensions"`
-}
-
-//Cube struct
-type Cube struct {
-	ID           string   `json:"id"`
-	Type         string   `json:"type"`
-	Location     []int    `json:"location"`
-	Dimensions   []int    `json:"cubeDimensions"`
-	PreviousData []string `json:"previousData"`
-	CurrentData  []string `json:"currentData"`
-	MaterialID   string   `json:"materialId"`
-}
 
 func resourceMinecraftCube() *schema.Resource {
 	return &schema.Resource{
@@ -50,6 +38,10 @@ func resourceMinecraftCube() *schema.Resource {
 							Type:     schema.TypeInt,
 							Required: true,
 						},
+						"world": {
+							Type:     schema.TypeString,
+							Required: true,
+						},
 					},
 				},
 			},
@@ -59,26 +51,26 @@ func resourceMinecraftCube() *schema.Resource {
 				MaxItems: 1,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
-						"length": {
+						"length_x": {
 							Type:     schema.TypeInt,
 							Required: true,
 						},
-						"width": {
+						"height_y": {
 							Type:     schema.TypeInt,
 							Required: true,
 						},
-						"height": {
+						"width_z": {
 							Type:     schema.TypeInt,
 							Required: true,
 						},
 					},
 				},
 			},
-			"material_id": {
+			"material": {
 				Type:     schema.TypeString,
 				Required: true,
 			},
-			"type": {
+			"shape_type": {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
@@ -89,158 +81,110 @@ func resourceMinecraftCube() *schema.Resource {
 					Type: schema.TypeString,
 				},
 			},
-			"current_data": {
-				Type:     schema.TypeList,
-				Computed: true,
-				Elem: &schema.Schema{
-					Type: schema.TypeString,
-				},
-			},
-			"dirty": {
-				Type:     schema.TypeBool,
-				Optional: true,
-				Default:  false,
-			},
 		},
 	}
 }
 
-func deserializeCubeDimensions(dimensions []int) []interface{} {
-	l := make([]interface{}, 1)
-	m := make(map[string]interface{})
-	m["height"] = dimensions[0]
-	m["width"] = dimensions[1]
-	m["length"] = dimensions[2]
-	l[0] = m
-	return l
-}
-
-func serializeCubeDimensions(dimensions interface{}) []int {
-	var height int
-	var width int
-	var length int
-	d := dimensions.([]interface{})[0].(map[string]interface{})
-	h, _ := d["height"]
-	height = h.(int)
-	w, _ := d["width"]
-	width = w.(int)
-	l, _ := d["length"]
-	length = l.(int)
-	return []int{height, width, length}
-}
-
-func deserializeLocation(location []int) []interface{} {
-	l := make([]interface{}, 1)
-	m := make(map[string]interface{})
-	m["x"] = location[0]
-	m["y"] = location[1]
-	m["z"] = location[2]
-	l[0] = m
-	return l
-}
-
-func serializeLocation(location interface{}) []int {
-	var xPos int
-	var yPos int
-	var zPos int
-	l := location.([]interface{})[0].(map[string]interface{})
-	x, _ := l["x"]
-	xPos = x.(int)
-	y, _ := l["y"]
-	yPos = y.(int)
-	z, _ := l["z"]
-	zPos = z.(int)
-	return []int{xPos, yPos, zPos}
-}
-
-func makeCubeRequest(d *schema.ResourceData) *CubeRequest {
-	// Get the material id
-	materialID := d.Get("material_id").(string)
-	dimensions := serializeCubeDimensions(d.Get("dimensions"))
-	location := serializeLocation(d.Get("location"))
-
-	cubeRequest := &CubeRequest{
-		MaterialID: materialID,
-		Dimensions: dimensions,
-		Location:   location,
-	}
-	return cubeRequest
-}
 func resourceMinecraftCubeCreate(d *schema.ResourceData, meta interface{}) error {
-	minecraftClient := meta.(*Client)
+	conn := meta.(*sdk.Client)
 
-	req, err := minecraftClient.newRequest("POST", "cube/", makeCubeRequest(d))
-	if err != nil {
-		return err
+	// Create a context
+	ctx := context.Background()
+
+	// Create a new cube
+	options := sdk.ShapeCreateOptions{
+		Location:   deserializeLocation(d.Get("location")),
+		ShapeType:  sdk.ShapeTypeCube,
+		Material:   d.Get("material").(string),
+		Dimensions: deserializeCubeDimensions(d.Get("dimensions")),
 	}
 
-	cube := &Cube{}
-	err = minecraftClient.do(ctx, req, cube)
-	if err != nil {
-		return err
-	}
-	d.SetId(cube.ID)
+	shape, _ := conn.Shapes.Create(ctx, options)
+	d.SetId(shape.ID)
 	resourceMinecraftCubeRead(d, meta)
 	return nil
 }
 
 func resourceMinecraftCubeRead(d *schema.ResourceData, meta interface{}) error {
-	minecraftClient := meta.(*Client)
+	conn := meta.(*sdk.Client)
+
+	// Create a context
+	ctx := context.Background()
+
 	id := d.Id()
-	req, err := minecraftClient.newRequest("GET", "cube/"+id, nil)
+	var shape *sdk.Shape
+	// Wait until resource is in a valid state
+	err := resource.Retry(1*time.Minute, func() *resource.RetryError {
+		shape, err := conn.Shapes.Read(ctx, id)
+		if err != nil {
+			log.Printf("[DEBUG] Error reading Shape: %s", err)
+			return resource.NonRetryableError(err)
+		}
+		if shape.Status != sdk.ResourceStatusReady {
+			log.Printf("[DEBUG] Shape not in ready state: %s", shape.Status)
+			return resource.RetryableError(errors.New("invalid state"))
+		}
+		return nil
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("Error reading Shape: %s", err)
 	}
 
-	cube := &Cube{}
-	err = minecraftClient.do(ctx, req, cube)
-	if err != nil {
-		return err
-	}
-	d.Set("material_id", cube.MaterialID)
-	log.Printf("loc: %v", cube.Location)
-	d.Set("location", deserializeLocation(cube.Location))
-	log.Printf("dim: %v", cube.Dimensions)
-	d.Set("dimensions", deserializeCubeDimensions(cube.Dimensions))
-	d.Set("current_data", cube.CurrentData)
-	d.Set("previous_data", cube.PreviousData)
-	for _, element := range cube.CurrentData {
-		if element != cube.MaterialID {
-			d.Set("dirty", true)
-			break
-		}
-	}
-	d.Set("current_data", cube.CurrentData)
-	d.Set("type", cube.Type)
+	d.Set("material", shape.Material)
+	d.Set("location", serializeLocation(shape.Location))
+	d.Set("dimensions", serializeCubeDimensions(shape.Dimensions.(*sdk.CubeDimensions)))
+	d.Set("previous_data", shape.PreviousData)
+	d.Set("shape_type", shape.ShapeType)
 	return nil
 }
 
 func resourceMinecraftCubeUpdate(d *schema.ResourceData, meta interface{}) error {
-	minecraftClient := meta.(*Client)
-	id := d.Id()
-	req, err := minecraftClient.newRequest("PATCH", "cube/"+id, makeCubeRequest(d))
-	if err != nil {
-		return err
+	conn := meta.(*sdk.Client)
+
+	// Create a context
+	ctx := context.Background()
+
+	// Update cube to current settings
+	options := sdk.ShapeUpdateOptions{
+		Location:   deserializeLocation(d.Get("location")),
+		ShapeType:  sdk.ShapeTypeCube,
+		Material:   d.Get("material").(string),
+		Dimensions: deserializeCubeDimensions(d.Get("dimensions")),
 	}
 
-	cube := &Cube{}
-	err = minecraftClient.do(ctx, req, cube)
-	if err != nil {
-		return err
-	}
+	id := d.Id()
+	conn.Shapes.Update(ctx, id, options)
 	return resourceMinecraftCubeRead(d, meta)
 }
 
 func resourceMinecraftCubeDelete(d *schema.ResourceData, meta interface{}) error {
-	minecraftClient := meta.(*Client)
+	conn := meta.(*sdk.Client)
 	id := d.Id()
-	req, err := minecraftClient.newRequest("DELETE", "cube/"+id, nil)
-	if err != nil {
-		return err
-	}
-	err = minecraftClient.do(ctx, req, nil)
-	if err != nil {
-		return err
-	}
+
+	// Create a context
+	ctx := context.Background()
+
+	conn.Shapes.Delete(ctx, id)
 	return nil
+}
+
+func deserializeCubeDimensions(dimensions interface{}) *sdk.CubeDimensions {
+	d := dimensions.([]interface{})[0].(map[string]interface{})
+	x, _ := d["lengthX"]
+	lengthX := x.(int)
+	y, _ := d["heightY"]
+	heightY := y.(int)
+	z, _ := d["widthZ"]
+	widthZ := z.(int)
+	return sdk.NewCubeDimensions(lengthX, heightY, widthZ)
+}
+
+func serializeCubeDimensions(dimensions *sdk.CubeDimensions) interface{} {
+	d := make([]interface{}, 1)
+	m := make(map[string]interface{})
+	m["lengthX"] = dimensions.LengthX
+	m["heightY"] = dimensions.HeightY
+	m["widthZ"] = dimensions.WidthZ
+	d[0] = m
+	return d
 }

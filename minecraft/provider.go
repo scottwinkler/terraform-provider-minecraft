@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/terraform/helper/mutexkv"
 	"github.com/hashicorp/terraform/helper/schema"
 	"github.com/hashicorp/terraform/terraform"
+	sdk "github.com/scottwinkler/go-minecraft"
 )
 
 // ctx is used as default context.Context when making API calls.
@@ -41,12 +42,12 @@ func providerConfigure(d *schema.ResourceData) (interface{}, error) {
 	address, _ := url.Parse(hostname)
 
 	// Create a new Minecraft client config
-	cfg := &Config{
+	cfg := &sdk.Config{
 		Address: address.String(),
 	}
 
 	// Create a new Minecraft client.
-	return NewClient(cfg)
+	return sdk.NewClient(cfg)
 }
 
 // This is a global MutexKV for use within this plugin.

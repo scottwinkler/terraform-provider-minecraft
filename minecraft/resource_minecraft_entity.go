@@ -1,33 +1,15 @@
 package minecraft
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"log"
+	"time"
 
 	"github.com/hashicorp/terraform/helper/schema"
-)
-
-//EntityResourceData struct
-type EntityResourceData struct {
-	EntityType string `json:"entityType"`
-	Location   []int  `json:"location"`
-	CustomName string `json:"customName"`
-}
-
-//Entity struct
-type Entity struct {
-	ID             string              `json:"id"`
-	ResourceData   *EntityResourceData `json:"serializedEntityResourceData"`
-	ResourceStatus ResourceStatus      `json:"resourceStatus"`
-}
-
-//ResourceStatus return
-type ResourceStatus string
-
-const (
-	ResourceInitializing ResourceStatus = "Initializing"
-	ResourceCreating     ResourceStatus = "Creating"
-	//ResourceDeleting ResourceStatus ="Deleting"
-	//ResourceUpdating ResourceStatus ="Updating"
+	sdk "github.com/scottwinkler/go-minecraft"
+	"github.com/scottwinkler/terraform/helper/resource"
 )
 
 func resourceMinecraftEntity() *schema.Resource {
@@ -56,6 +38,10 @@ func resourceMinecraftEntity() *schema.Resource {
 							Type:     schema.TypeInt,
 							Required: true,
 						},
+						"world": {
+							Type:     schema.TypeString,
+							Required: true,
+						},
 					},
 				},
 			},
@@ -72,82 +58,81 @@ func resourceMinecraftEntity() *schema.Resource {
 	}
 }
 
-func makeEntityResourceData(d *schema.ResourceData) *EntityResourceData {
-	entityType := d.Get("entity_type").(string)
-	customName := d.Get("custom_name").(string)
-	location := serializeLocation(d.Get("location"))
-
-	EntityResourceData := &EntityResourceData{
-		EntityType: entityType,
-		CustomName: customName,
-		Location:   location,
-	}
-	return EntityResourceData
-}
 func resourceMinecraftEntityCreate(d *schema.ResourceData, meta interface{}) error {
-	minecraftClient := meta.(*Client)
-	r := makeEntityResourceData(d)
-	log.Printf("resourceData: %v", r)
-	req, err := minecraftClient.newRequest("POST", "entity/", makeEntityResourceData(d))
-	if err != nil {
-		return err
+	conn := meta.(*sdk.Client)
+
+	// Create a context
+	ctx := context.Background()
+
+	// Create a new entity
+	options := sdk.EntityCreateOptions{
+		Location:   deserializeLocation(d.Get("location")),
+		EntityType: d.Get("entity_type").(string),
+		CustomName: d.Get("custom_name").(string),
 	}
 
-	entity := &Entity{}
-	err = minecraftClient.do(ctx, req, entity)
-	if err != nil {
-		return err
-	}
+	entity, _ := conn.Entities.Create(ctx, options)
 	d.SetId(entity.ID)
 	resourceMinecraftEntityRead(d, meta)
 	return nil
 }
 
 func resourceMinecraftEntityRead(d *schema.ResourceData, meta interface{}) error {
-	minecraftClient := meta.(*Client)
+	conn := meta.(*sdk.Client)
+
+	// Create a context
+	ctx := context.Background()
+
 	id := d.Id()
-	req, err := minecraftClient.newRequest("GET", "entity/"+id, nil)
+	var entity *sdk.Entity
+	// Wait until resource is in a valid state
+	err := resource.Retry(1*time.Minute, func() *resource.RetryError {
+		entity, err := conn.Entities.Read(ctx, id)
+		if err != nil {
+			log.Printf("[DEBUG] Error reading Entity: %s", err)
+			return resource.NonRetryableError(err)
+		}
+		if entity.Status != sdk.ResourceStatusReady {
+			log.Printf("[DEBUG] Entity not in ready state: %s", entity.Status)
+			return resource.RetryableError(errors.New("invalid state"))
+		}
+		return nil
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("Error reading Entity: %s", err)
 	}
 
-	entity := &Entity{}
-	err = minecraftClient.do(ctx, req, entity)
-	if err != nil {
-		return err
-	}
-	d.Set("custom_name", entity.ResourceData.CustomName)
-	d.Set("location", deserializeLocation(entity.ResourceData.Location))
-	d.Set("entityType", entity.ResourceData.EntityType)
+	d.Set("location", serializeLocation(entity.Location))
+	d.Set("custom_name", entity.CustomName)
+	d.Set("entity_type", entity.EntityType)
 	return nil
 }
 
 func resourceMinecraftEntityUpdate(d *schema.ResourceData, meta interface{}) error {
-	minecraftClient := meta.(*Client)
-	id := d.Id()
-	req, err := minecraftClient.newRequest("PATCH", "entity/"+id, makeEntityResourceData(d))
-	if err != nil {
-		return err
+	conn := meta.(*sdk.Client)
+
+	// Create a context
+	ctx := context.Background()
+
+	// Update entity to current settings
+	options := sdk.EntityUpdateOptions{
+		Location:   deserializeLocation(d.Get("location")),
+		EntityType: d.Get("entity_type").(string),
+		CustomName: d.Get("custom_name").(string),
 	}
 
-	entity := &Entity{}
-	err = minecraftClient.do(ctx, req, entity)
-	if err != nil {
-		return err
-	}
+	id := d.Id()
+	conn.Entities.Update(ctx, id, options)
 	return resourceMinecraftEntityRead(d, meta)
 }
 
 func resourceMinecraftEntityDelete(d *schema.ResourceData, meta interface{}) error {
-	minecraftClient := meta.(*Client)
+	conn := meta.(*sdk.Client)
 	id := d.Id()
-	req, err := minecraftClient.newRequest("DELETE", "entity/"+id, nil)
-	if err != nil {
-		return err
-	}
-	err = minecraftClient.do(ctx, req, nil)
-	if err != nil {
-		return err
-	}
+
+	// Create a context
+	ctx := context.Background()
+
+	conn.Entities.Delete(ctx, id)
 	return nil
 }
