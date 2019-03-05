@@ -99,7 +99,9 @@ func resourceMinecraftCubeCreate(d *schema.ResourceData, meta interface{}) error
 		Dimensions: deserializeCubeDimensions(d.Get("dimensions")),
 	}
 
-	shape, _ := conn.Shapes.Create(ctx, options)
+	shape, err := conn.Shapes.Create(ctx, options)
+	log.Printf("%v", err)
+	log.Printf("%v", shape)
 	d.SetId(shape.ID)
 	resourceMinecraftCubeRead(d, meta)
 	return nil
@@ -170,11 +172,11 @@ func resourceMinecraftCubeDelete(d *schema.ResourceData, meta interface{}) error
 
 func deserializeCubeDimensions(dimensions interface{}) *sdk.CubeDimensions {
 	d := dimensions.([]interface{})[0].(map[string]interface{})
-	x, _ := d["lengthX"]
+	x, _ := d["length_x"]
 	lengthX := x.(int)
-	y, _ := d["heightY"]
+	y, _ := d["height_y"]
 	heightY := y.(int)
-	z, _ := d["widthZ"]
+	z, _ := d["width_z"]
 	widthZ := z.(int)
 	return sdk.NewCubeDimensions(lengthX, heightY, widthZ)
 }
@@ -182,9 +184,9 @@ func deserializeCubeDimensions(dimensions interface{}) *sdk.CubeDimensions {
 func serializeCubeDimensions(dimensions *sdk.CubeDimensions) interface{} {
 	d := make([]interface{}, 1)
 	m := make(map[string]interface{})
-	m["lengthX"] = dimensions.LengthX
-	m["heightY"] = dimensions.HeightY
-	m["widthZ"] = dimensions.WidthZ
+	m["length_x"] = dimensions.LengthX
+	m["height_y"] = dimensions.HeightY
+	m["width_z"] = dimensions.WidthZ
 	d[0] = m
 	return d
 }
