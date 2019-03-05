@@ -115,9 +115,10 @@ func resourceMinecraftCubeRead(d *schema.ResourceData, meta interface{}) error {
 
 	id := d.Id()
 	var shape *sdk.Shape
+	var err error
 	// Wait until resource is in a valid state
-	err := resource.Retry(1*time.Minute, func() *resource.RetryError {
-		shape, err := conn.Shapes.Read(ctx, id)
+	err = resource.Retry(1*time.Minute, func() *resource.RetryError {
+		shape, err = conn.Shapes.Read(ctx, id)
 		if err != nil {
 			log.Printf("[DEBUG] Error reading Shape: %s", err)
 			return resource.NonRetryableError(err)
@@ -131,7 +132,7 @@ func resourceMinecraftCubeRead(d *schema.ResourceData, meta interface{}) error {
 	if err != nil {
 		return fmt.Errorf("Error reading Shape: %s", err)
 	}
-
+	log.Printf("read shape: %v", shape)
 	d.Set("material", shape.Material)
 	d.Set("location", serializeLocation(shape.Location))
 	d.Set("dimensions", serializeCubeDimensions(shape.Dimensions.(*sdk.CubeDimensions)))
