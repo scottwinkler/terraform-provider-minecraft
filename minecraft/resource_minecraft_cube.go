@@ -168,6 +168,19 @@ func resourceMinecraftCubeDelete(d *schema.ResourceData, meta interface{}) error
 	ctx := context.Background()
 
 	conn.Shapes.Delete(ctx, id)
+
+	// Wait until resource is finished deleting
+	resource.Retry(1*time.Minute, func() *resource.RetryError {
+		_, err := conn.Shapes.Read(ctx, id)
+		// A 404 error indicates success
+		if err != nil {
+			if err == sdk.ErrResourceNotFound {
+				return nil
+			}
+		}
+		log.Printf("[DEBUG] Shape deleting...")
+		return resource.RetryableError(errors.New("invalid state"))
+	})
 	return nil
 }
 

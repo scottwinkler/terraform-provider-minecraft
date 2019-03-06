@@ -85,15 +85,16 @@ func resourceMinecraftEntityRead(d *schema.ResourceData, meta interface{}) error
 
 	id := d.Id()
 	var entity *sdk.Entity
+	var err error
 	// Wait until resource is in a valid state
-	err := resource.Retry(1*time.Minute, func() *resource.RetryError {
-		entity, err := conn.Entities.Read(ctx, id)
+	err = resource.Retry(1*time.Minute, func() *resource.RetryError {
+		entity, err = conn.Entities.Read(ctx, id)
 		if err != nil {
 			log.Printf("[DEBUG] Error reading Entity: %s", err)
 			return resource.NonRetryableError(err)
 		}
 		if entity.Status != sdk.ResourceStatusReady {
-			log.Printf("[DEBUG] Entity not in ready state: %s", entity.Status)
+			log.Printf("[DEBUG] Entity not in ready state. Current state is: %s", entity.Status)
 			return resource.RetryableError(errors.New("invalid state"))
 		}
 		return nil
@@ -134,5 +135,19 @@ func resourceMinecraftEntityDelete(d *schema.ResourceData, meta interface{}) err
 	ctx := context.Background()
 
 	conn.Entities.Delete(ctx, id)
+
+	// Wait until resource is finished deleting
+	resource.Retry(1*time.Minute, func() *resource.RetryError {
+		_, err := conn.Entities.Read(ctx, id)
+		// A 404 error indicates success
+		if err != nil {
+			if err == sdk.ErrResourceNotFound {
+				return nil
+			}
+		}
+		log.Printf("[DEBUG] Entity deleting...")
+		return resource.RetryableError(errors.New("invalid state"))
+
+	})
 	return nil
 }

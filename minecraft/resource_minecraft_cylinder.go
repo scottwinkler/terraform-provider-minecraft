@@ -109,15 +109,16 @@ func resourceMinecraftCylinderRead(d *schema.ResourceData, meta interface{}) err
 
 	id := d.Id()
 	var shape *sdk.Shape
+	var err error
 	// Wait until resource is in a valid state
-	err := resource.Retry(1*time.Minute, func() *resource.RetryError {
-		shape, err := conn.Shapes.Read(ctx, id)
+	err = resource.Retry(1*time.Minute, func() *resource.RetryError {
+		shape, err = conn.Shapes.Read(ctx, id)
 		if err != nil {
 			log.Printf("[DEBUG] Error reading Shape: %s", err)
 			return resource.NonRetryableError(err)
 		}
 		if shape.Status != sdk.ResourceStatusReady {
-			log.Printf("[DEBUG] Shape not in ready state: %s", shape.Status)
+			log.Printf("[DEBUG] Shape not in ready state. Current state is: %s", shape.Status)
 			return resource.RetryableError(errors.New("invalid state"))
 		}
 		return nil
@@ -161,6 +162,19 @@ func resourceMinecraftCylinderDelete(d *schema.ResourceData, meta interface{}) e
 	ctx := context.Background()
 
 	conn.Shapes.Delete(ctx, id)
+
+	// Wait until resource is finished deleting
+	resource.Retry(1*time.Minute, func() *resource.RetryError {
+		_, err := conn.Shapes.Read(ctx, id)
+		// A 404 error indicates success
+		if err != nil {
+			if err == sdk.ErrResourceNotFound {
+				return nil
+			}
+		}
+		log.Printf("[DEBUG] Shape deleting...")
+		return resource.RetryableError(errors.New("invalid state"))
+	})
 	return nil
 }
 
