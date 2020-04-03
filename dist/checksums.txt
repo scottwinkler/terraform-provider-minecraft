@@ -1,0 +1,3 @@
+9644b9e1b603dcc90095868613bbadee68d67efd54be310d3bfbf244bcf35c29  terraform-provider-minecraft_v0.1.0-next_Linux_x86_64.tar.gz
+5d3236b726a6456cc538c9a377790478dc8d0f53eb64f8f560c3f87360d54197  terraform-provider-minecraft_v0.1.0-next_Windows_x86_64.tar.gz
+652d3fd5a822fd2312d12525e099a4f5d47239320f217c0576d86c7f5cafb028  terraform-provider-minecraft_v0.1.0-next_Darwin_x86_64.tar.gz
