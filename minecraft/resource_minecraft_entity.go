@@ -7,9 +7,9 @@ import (
 	"log"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 	sdk "github.com/scottwinkler/go-minecraft"
-	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
 )
 
 func resourceMinecraftEntity() *schema.Resource {
