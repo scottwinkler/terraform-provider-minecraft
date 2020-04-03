@@ -7,3 +7,4 @@
 
 # Crash log files
 crash.log
+/dist
